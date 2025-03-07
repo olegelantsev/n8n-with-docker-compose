@@ -1,0 +1,87 @@
+version: '3'
+services:
+  redis:
+    image: redis:7.0.5
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"
+  traefik:
+    image: "traefik:v3.2"
+    container_name: "traefik"
+    command:
+      # - "--api.insecure=true" # remove in production
+      #- "--log.level=DEBUG"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - --metrics.prometheus.addEntryPointsLabels=true
+      - --metrics.prometheus.addServicesLabels=true
+      - --entryPoints.metrics.address=:8899
+      - --metrics.prometheus.entryPoint=metrics
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=<YOUR_EMAIL>"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - --tracing=true
+      - --tracing.otlp.grpc=true
+      - --tracing.otlp.grpc.insecure=true
+      - --tracing.otlp.grpc.endpoint=otel-collector:4317
+      - "--tracing.serviceName=traefik"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8899:8899"
+    volumes:
+      - "./letsencrypt:/letsencrypt"
+      - "./auth:/auth"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.80.3
+    container_name: n8n
+    expose: [5678]
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=(Host(`portal.example.com`))"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls.certresolver=myresolver"
+      - "traefik.http.routers.n8n.middlewares=n8n" # this line enforces traefik-forward-auth
+      - traefik.http.middlewares.n8n.headers.SSLRedirect=true
+      - traefik.http.middlewares.n8n.headers.STSSeconds=315360000
+      - traefik.http.middlewares.n8n.headers.browserXSSFilter=true
+      - traefik.http.middlewares.n8n.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.n8n.headers.forceSTSHeader=true
+      - traefik.http.middlewares.n8n.headers.SSLHost=portal.example.com
+      - traefik.http.middlewares.n8n.headers.STSIncludeSubdomains=true
+      - traefik.http.middlewares.n8n.headers.STSPreload=true
+    environment:
+      - N8N_HOST=portal.example.com
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      #- N8N_PUSH_BACKEND=sse
+      - WEBHOOK_URL=https://portal.example.com/
+    volumes:
+      - /home/funda/.n8n:/home/node/.n8n
+  traefik-forward-auth:
+    image: thomseddon/traefik-forward-auth:2.1.0
+    env_file: /var/data/config/traefik-forward-auth/traefik-forward-auth.env
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.auth.rule=Host(`auth.example.com`)"
+      - "traefik.http.routers.auth.entrypoints=websecure"
+      - "traefik.http.routers.auth.tls=true"
+      - "traefik.http.routers.auth.tls.certresolver=myresolver"
+      - "traefik.http.routers.auth.service=auth@docker"
+      - "traefik.http.services.auth.loadbalancer.server.port=4181"
+      - "traefik.http.middlewares.forward-auth.forwardauth.address=http://traefik-forward-auth:4181"
+      - "traefik.http.middlewares.forward-auth.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.forward-auth.forwardauth.authResponseHeaders=X-Forwarded-User"
+      - "traefik.http.routers.auth.middlewares=forward-auth"

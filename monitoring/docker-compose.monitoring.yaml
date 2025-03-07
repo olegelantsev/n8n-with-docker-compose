@@ -1,0 +1,75 @@
+version: '3'
+services:
+  redis:
+    image: redis:7.0.5
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"
+  # otel-collector:
+  #   image: otel/opentelemetry-collector-contrib:latest
+  #   container_name: otel-collector
+  #   ports:
+  #     - "127.0.0.1:4317:4317" # OpenTelemetry gRPC
+  #     - "127.0.0.1:8889:8889"   # Metrics exposition
+  #     - "127.0.0.1:8888:8888"   # Metrics exposition
+  #     - "127.0.0.1:13133:13133" # health_check extension
+  #   volumes:
+  #     - ./otel-config.yaml:/etc/otel-collector-config.yaml
+  #   command: ["--config=/etc/otel-collector-config.yaml"]
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    command:
+      - --enable-feature=exemplar-storage
+      - --web.enable-remote-write-receiver
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - 127.0.0.1:9090:9090
+    restart: unless-stopped
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prom_data:/prometheus
+  # tempo:
+  #   image: grafana/tempo:latest
+  #   container_name: tempo
+  #   ports:
+  #     - "127.0.0.1:14268:14268" # Jaeger HTTP Thrift for receiving spans
+  #     - "127.0.0.1:3200:3200"   # Tempo query API (optional for debugging)
+  #   volumes:
+  #     - ./tempo-data:/etc/tempo
+  #   command: [ "-config.file=/etc/tempo/tempo.yaml" ]
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - 127.0.0.1:3000:3000
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=grafana
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=(Host(`www.example.com`) && PathPrefix(`/grafana`))"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=myresolver"
+      - "traefik.http.middlewares.grafana-strip-prefix.stripprefix.prefixes=/grafana"
+      - "traefik.http.routers.grafana.middlewares=forward-auth, grafana-strip-prefix"
+      - traefik.http.middlewares.grafana.headers.SSLRedirect=true
+      - traefik.http.middlewares.grafana.headers.STSSeconds=315360000
+      - traefik.http.middlewares.grafana.headers.browserXSSFilter=true
+      - traefik.http.middlewares.grafana.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.grafana.headers.forceSTSHeader=true
+      - traefik.http.middlewares.grafana.headers.SSLHost=example.com
+      - traefik.http.middlewares.grafana.headers.STSIncludeSubdomains=true
+      - traefik.http.middlewares.grafana.headers.STSPreload=true
+    volumes:
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - tempo
+      - prometheus
+volumes:
+  prom_data:
